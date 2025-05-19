@@ -28,6 +28,9 @@ const games = new Map();
 // Store winners
 const winners = new Map();
 
+// Bot player ID
+const BOT_ID = "bot";
+
 // Handle new connections
 wss.on("connection", (ws, req) => {
   const clientId = Date.now().toString();
@@ -104,6 +107,9 @@ wss.on("connection", (ws, req) => {
           break;
         case "randomAttack":
           handleRandomAttack(ws, data, clientId);
+          break;
+        case "single_play":
+          createSinglePlayerGame(clientId);
           break;
         default:
           console.log(`Unknown message type from ${clientId}:`, data.type);
@@ -393,8 +399,10 @@ function createGame(room) {
           .fill()
           .map(() => Array(10).fill(null)),
         ready: false,
+        isBot: false,
       })),
       currentPlayerIndex: room.users[0].index, // First player starts
+      lastHit: null, // Track last hit for bot's strategy
     };
 
     games.set(gameId, game);
@@ -418,6 +426,67 @@ function createGame(room) {
     console.log(`Game ${gameId} created for room ${room.id}`);
   } catch (err) {
     console.error(`Error creating game for room ${room.id}:`, err);
+  }
+}
+
+// Create single player game with bot
+function createSinglePlayerGame(clientId) {
+  try {
+    const gameId = Date.now().toString();
+    const client = clients.get(clientId);
+
+    if (!client) {
+      console.log(`Client ${clientId} not found`);
+      return;
+    }
+
+    // Create game state
+    const game = {
+      id: gameId,
+      players: [
+        {
+          id: clientId,
+          name: client.name,
+          ships: [],
+          board: Array(10)
+            .fill()
+            .map(() => Array(10).fill(null)),
+          ready: false,
+          isBot: false,
+        },
+        {
+          id: BOT_ID,
+          name: "Bot",
+          ships: generateBotShips(),
+          board: Array(10)
+            .fill()
+            .map(() => Array(10).fill(null)),
+          ready: true,
+          isBot: true,
+        },
+      ],
+      currentPlayerIndex: clientId,
+      lastHit: null,
+    };
+
+    games.set(gameId, game);
+
+    // Notify player
+    if (client.ws.readyState === client.ws.OPEN) {
+      const response = {
+        type: "create_game",
+        data: JSON.stringify({
+          idGame: gameId,
+          idPlayer: clientId,
+        }),
+        id: 0,
+      };
+      client.ws.send(JSON.stringify(response));
+    }
+
+    console.log(`Single player game ${gameId} created for player ${clientId}`);
+  } catch (err) {
+    console.error(`Error creating single player game for ${clientId}:`, err);
   }
 }
 
@@ -585,6 +654,104 @@ function startGame(game) {
   }
 }
 
+// Generate random ship positions for bot
+function generateBotShips() {
+  const ships = [];
+  const board = Array(10)
+    .fill()
+    .map(() => Array(10).fill(null)); // Temporary board for placement checking
+  const shipTypes = [
+    { type: "small", length: 1, count: 4 },
+    { type: "medium", length: 2, count: 3 },
+    { type: "large", length: 3, count: 2 },
+    { type: "huge", length: 4, count: 1 },
+  ];
+
+  for (const shipType of shipTypes) {
+    for (let i = 0; i < shipType.count; i++) {
+      let validPosition = false;
+      let newShip;
+
+      while (!validPosition) {
+        const x = Math.floor(Math.random() * 10);
+        const y = Math.floor(Math.random() * 10);
+        const direction = Math.random() < 0.5;
+
+        const potentialShip = {
+          position: { x, y },
+          direction,
+          length: shipType.length,
+          type: shipType.type, // Type is needed for getShipCells if it uses it, or for consistency
+        };
+
+        const newShipCells = getShipCells(potentialShip);
+
+        // Check 1: Ship fits on board
+        const fitsOnBoard = newShipCells.every(
+          (cell) => cell.x >= 0 && cell.x < 10 && cell.y >= 0 && cell.y < 10
+        );
+        if (!fitsOnBoard) continue;
+
+        // Check 2: Direct overlap with existing ships on the temporary board
+        const overlapsDirectly = newShipCells.some(
+          (cell) => board[cell.y][cell.x] === "ship"
+        );
+        if (overlapsDirectly) continue;
+
+        // Check 3: Adjacency with existing ships on the temporary board
+        let isAdjacentToExistingShip = false;
+        for (const cell of newShipCells) {
+          for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+              // No need to check cell itself, dx=0 and dy=0 is fine as it would be caught by direct overlap if it was a ship cell
+              const checkX = cell.x + dx;
+              const checkY = cell.y + dy;
+
+              if (checkX >= 0 && checkX < 10 && checkY >= 0 && checkY < 10) {
+                if (board[checkY][checkX] === "ship") {
+                  isAdjacentToExistingShip = true;
+                  break;
+                }
+              }
+            }
+            if (isAdjacentToExistingShip) break;
+          }
+          if (isAdjacentToExistingShip) break;
+        }
+        if (isAdjacentToExistingShip) continue;
+
+        // All checks passed
+        newShip = potentialShip;
+        validPosition = true;
+
+        // Mark ship cells on the temporary board for subsequent checks
+        newShipCells.forEach((cell) => {
+          board[cell.y][cell.x] = "ship";
+        });
+      }
+      ships.push(newShip);
+    }
+  }
+
+  // Log the generated board for debugging (optional)
+  console.log("\n=== Bot's Initial Board State (with no-adjacency) ===");
+  console.log(
+    "  " +
+      Array(10)
+        .fill()
+        .map((_, i) => i)
+        .join(" ")
+  );
+  board.forEach((row, y) => {
+    console.log(
+      `${y} ${row.map((cell) => (cell === "ship" ? "S" : ".")).join(" ")}`
+    );
+  });
+  console.log("=== End Bot's Board State ===\n");
+
+  return ships;
+}
+
 // Handle attack
 function handleAttack(ws, data, clientId) {
   try {
@@ -622,8 +789,34 @@ function handleAttack(ws, data, clientId) {
       return;
     }
 
+    console.log(`\n=== Attack by ${indexPlayer} at (${x}, ${y}) ===`);
+    console.log(
+      `Target player board state before attack:`,
+      targetPlayer.board.map((row) =>
+        row.map((cell) => {
+          if (cell === null) return ".";
+          if (cell === "hit") return "H";
+          if (cell === "killed") return "K";
+          return "M";
+        })
+      )
+    );
+
     // Process attack
     const attackResult = processAttack(targetPlayer, x, y);
+
+    console.log(`Attack result:`, attackResult);
+    console.log(
+      `Target player board state after attack:`,
+      targetPlayer.board.map((row) =>
+        row.map((cell) => {
+          if (cell === null) return ".";
+          if (cell === "hit") return "H";
+          if (cell === "killed") return "K";
+          return "M";
+        })
+      )
+    );
 
     // Send attack result to both players
     game.players.forEach((player) => {
@@ -644,32 +837,44 @@ function handleAttack(ws, data, clientId) {
 
     // If ship was killed, send miss for surrounding cells
     if (attackResult.status === "killed") {
+      console.log(`Ship killed at (${x}, ${y})`);
       sendSurroundingMisses(game, attackResult.ship);
+      game.lastHit = null; // Reset last hit when ship is killed
+
+      // Check if game is over after a ship is killed
+      if (checkGameOver(targetPlayer)) {
+        console.log(`Game over detected for player ${targetPlayer.name}`);
+        endGame(game, indexPlayer);
+        return; // Exit early as game is over
+      }
+    } else if (attackResult.status === "shot") {
+      console.log(`Ship hit at (${x}, ${y})`);
+      game.lastHit = { x, y }; // Remember last hit for bot's strategy
     }
 
-    // Check if game is over
-    if (checkGameOver(targetPlayer)) {
-      endGame(game, indexPlayer);
-    } else {
-      // Switch turns if it was a miss
-      if (attackResult.status === "miss") {
-        game.currentPlayerIndex = targetPlayer.id;
+    // Switch turns if it was a miss
+    if (attackResult.status === "miss") {
+      game.currentPlayerIndex = targetPlayer.id;
+    }
 
-        // Send turn information to both players
-        game.players.forEach((player) => {
-          const client = clients.get(player.id);
-          if (client && client.ws.readyState === client.ws.OPEN) {
-            const turnResponse = {
-              type: "turn",
-              data: JSON.stringify({
-                currentPlayer: game.currentPlayerIndex,
-              }),
-              id: 0,
-            };
-            client.ws.send(JSON.stringify(turnResponse));
-          }
-        });
+    // Send turn information to both players
+    game.players.forEach((player) => {
+      const client = clients.get(player.id);
+      if (client && client.ws.readyState === client.ws.OPEN) {
+        const turnResponse = {
+          type: "turn",
+          data: JSON.stringify({
+            currentPlayer: game.currentPlayerIndex,
+          }),
+          id: 0,
+        };
+        client.ws.send(JSON.stringify(turnResponse));
       }
+    });
+
+    // If next player is bot, make bot's move
+    if (game.currentPlayerIndex === BOT_ID) {
+      setTimeout(() => makeBotMove(game), 1000); // Add delay for better UX
     }
 
     console.log(`Attack processed for player ${indexPlayer} in game ${gameId}`);
@@ -682,29 +887,66 @@ function handleAttack(ws, data, clientId) {
 function processAttack(player, x, y) {
   // Check if cell was already attacked
   if (player.board[y][x] !== null) {
+    console.log(
+      `Cell (${x}, ${y}) already attacked with status:`,
+      player.board[y][x]
+    );
     return { status: "miss" };
   }
 
   // Check if any ship was hit
   for (const ship of player.ships) {
     const shipCells = getShipCells(ship);
-    if (shipCells.some((cell) => cell.x === x && cell.y === y)) {
-      // Mark cell as hit
+    const hitCell = shipCells.find((cell) => cell.x === x && cell.y === y);
+
+    if (hitCell) {
+      console.log(`Ship hit! Type: ${ship.type}, Length: ${ship.length}`);
+      console.log(`Ship cells:`, shipCells);
+
+      // Mark the hit cell
       player.board[y][x] = "hit";
 
-      // Check if ship is killed
-      const isKilled = shipCells.every(
-        (cell) => player.board[cell.y][cell.x] === "hit"
-      );
+      // Check if ship is killed (all cells are hit)
+      const isKilled = shipCells.every((cell) => {
+        return (
+          player.board[cell.y][cell.x] === "hit" ||
+          player.board[cell.y][cell.x] === "killed"
+        );
+      });
 
+      console.log(`Ship state:`, {
+        type: ship.type,
+        length: ship.length,
+        cells: shipCells.map((cell) => ({
+          x: cell.x,
+          y: cell.y,
+          state: player.board[cell.y][cell.x],
+        })),
+      });
+      console.log(`Is ship killed:`, isKilled);
+
+      // If ship is killed, mark all cells as killed
+      if (isKilled) {
+        console.log("Ship killed! Marking all cells as killed");
+        shipCells.forEach((cell) => {
+          player.board[cell.y][cell.x] = "killed";
+        });
+        return {
+          status: "killed",
+          ship: ship,
+        };
+      }
+
+      // If not killed, return shot status
       return {
-        status: isKilled ? "killed" : "shot",
-        ship: isKilled ? ship : null,
+        status: "shot",
+        ship: null,
       };
     }
   }
 
   // Mark cell as miss
+  console.log("Miss!");
   player.board[y][x] = "miss";
   return { status: "miss" };
 }
@@ -724,21 +966,61 @@ function getShipCells(ship) {
 // Send miss for cells surrounding a killed ship
 function sendSurroundingMisses(game, ship) {
   const surroundingCells = getSurroundingCells(ship);
+  const targetPlayer = game.players.find(
+    (p) => p.id !== game.currentPlayerIndex
+  );
 
+  // First update the board state on the server
+  surroundingCells.forEach((cell) => {
+    const isPartOfAnotherShip = targetPlayer.ships.some((s) => {
+      if (s === ship) return false; // Don't consider the ship that was just killed
+      const shipCells = getShipCells(s);
+      return shipCells.some((sc) => sc.x === cell.x && sc.y === cell.y);
+    });
+
+    if (targetPlayer.board[cell.y][cell.x] === null && !isPartOfAnotherShip) {
+      targetPlayer.board[cell.y][cell.x] = "miss";
+    }
+  });
+
+  // Then send updates to players
   game.players.forEach((player) => {
     const client = clients.get(player.id);
     if (client && client.ws.readyState === client.ws.OPEN) {
-      surroundingCells.forEach((cell) => {
+      // Send the killed ship cells
+      const shipCells = getShipCells(ship);
+      shipCells.forEach((cell) => {
         const response = {
           type: "attack",
           data: JSON.stringify({
             position: cell,
             currentPlayer: game.currentPlayerIndex,
-            status: "miss",
+            status: "killed", // Ship cells are always killed
           }),
           id: 0,
         };
         client.ws.send(JSON.stringify(response));
+      });
+
+      // Send the actual state of all surrounding cells
+      surroundingCells.forEach((cell) => {
+        const currentCellState = targetPlayer.board[cell.y][cell.x];
+        // We only need to send an update if the cell has a defined state (hit, miss, killed)
+        // If it's null, it means it's an empty part of another ship, client shouldn't mark it.
+        // Or it's an empty cell the client already knows is empty.
+        // The client typically only cares about changes or confirmed states.
+        if (currentCellState !== null) {
+          const response = {
+            type: "attack",
+            data: JSON.stringify({
+              position: cell,
+              currentPlayer: game.currentPlayerIndex,
+              status: currentCellState, // Send the actual current state
+            }),
+            id: 0,
+          };
+          client.ws.send(JSON.stringify(response));
+        }
       });
     }
   });
@@ -843,14 +1125,71 @@ function handleRandomAttack(ws, data, clientId) {
 
 // Check if game is over
 function checkGameOver(player) {
-  return player.ships.every((ship) =>
-    getShipCells(ship).every((cell) => player.board[cell.y][cell.x] === "hit")
+  console.log("\n=== Checking Game Over ===");
+  console.log("Player:", player.name);
+  console.log("All ships status:");
+
+  // Log each ship's status
+  player.ships.forEach((ship, index) => {
+    const shipCells = getShipCells(ship);
+    const cellStates = shipCells.map((cell) => ({
+      x: cell.x,
+      y: cell.y,
+      state: player.board[cell.y][cell.x],
+    }));
+
+    console.log(`\nShip ${index + 1}:`, {
+      type: ship.type,
+      length: ship.length,
+      position: ship.position,
+      direction: ship.direction,
+      cells: cellStates,
+      isDestroyed: cellStates.every((cell) => cell.state === "killed"),
+    });
+  });
+
+  // Log complete board state
+  console.log("\nComplete board state:");
+  console.log(
+    "  " +
+      Array(10)
+        .fill()
+        .map((_, i) => i)
+        .join(" ")
   );
+  player.board.forEach((row, y) => {
+    console.log(
+      `${y} ${row
+        .map((cell) => {
+          if (cell === null) return ".";
+          if (cell === "hit") return "H";
+          if (cell === "killed") return "K";
+          return "M";
+        })
+        .join(" ")}`
+    );
+  });
+
+  // Check if all ships are completely destroyed
+  const isGameOver = player.ships.every((ship) => {
+    const shipCells = getShipCells(ship);
+    const isShipDestroyed = shipCells.every(
+      (cell) => player.board[cell.y][cell.x] === "killed"
+    );
+    console.log(`Ship ${ship.type} destroyed:`, isShipDestroyed);
+    return isShipDestroyed;
+  });
+
+  console.log("\nGame over:", isGameOver);
+  console.log("=== End Game Over Check ===\n");
+  return isGameOver;
 }
 
 // End game
 function endGame(game, winnerId) {
   try {
+    console.log(`Game ${game.id} ending, winner: ${winnerId}`);
+
     // Update winner's stats
     const winner = clients.get(winnerId);
     if (winner) {
@@ -862,6 +1201,7 @@ function endGame(game, winnerId) {
     game.players.forEach((player) => {
       const client = clients.get(player.id);
       if (client && client.ws.readyState === client.ws.OPEN) {
+        // Send game over message
         const response = {
           type: "finish",
           data: JSON.stringify({
@@ -870,6 +1210,16 @@ function endGame(game, winnerId) {
           id: 0,
         };
         client.ws.send(JSON.stringify(response));
+
+        // Send final turn message to prevent UI from showing "your turn"
+        const turnResponse = {
+          type: "turn",
+          data: JSON.stringify({
+            currentPlayer: null, // Set to null to indicate game is over
+          }),
+          id: 0,
+        };
+        client.ws.send(JSON.stringify(turnResponse));
       }
     });
 
@@ -994,3 +1344,83 @@ wss.on("error", (error) => {
 server.listen(3000, () => {
   console.log("Battleship WebSocket server running on port 3000");
 });
+
+// Make bot's move
+function makeBotMove(game) {
+  try {
+    const bot = game.players.find((p) => p.isBot);
+    const targetPlayer = game.players.find((p) => !p.isBot);
+
+    if (!bot || !targetPlayer) {
+      console.log("Bot or target player not found");
+      return;
+    }
+
+    let x, y;
+
+    if (game.lastHit) {
+      // If there was a hit, try adjacent cells
+      const adjacentCells = getAdjacentCells(game.lastHit.x, game.lastHit.y);
+      const validCells = adjacentCells.filter(
+        (cell) =>
+          cell.x >= 0 &&
+          cell.x < 10 &&
+          cell.y >= 0 &&
+          cell.y < 10 &&
+          targetPlayer.board[cell.y][cell.x] === null
+      );
+
+      if (validCells.length > 0) {
+        const randomCell =
+          validCells[Math.floor(Math.random() * validCells.length)];
+        x = randomCell.x;
+        y = randomCell.y;
+      } else {
+        // If no valid adjacent cells, make random move
+        do {
+          x = Math.floor(Math.random() * 10);
+          y = Math.floor(Math.random() * 10);
+        } while (targetPlayer.board[y][x] !== null);
+      }
+    } else {
+      // Make random move
+      do {
+        x = Math.floor(Math.random() * 10);
+        y = Math.floor(Math.random() * 10);
+      } while (targetPlayer.board[y][x] !== null);
+    }
+
+    // Process bot's attack
+    const attackData = {
+      gameId: game.id,
+      x,
+      y,
+      indexPlayer: BOT_ID,
+    };
+
+    const client = clients.get(targetPlayer.id);
+    if (client && client.ws.readyState === client.ws.OPEN) {
+      handleAttack(
+        client.ws,
+        {
+          type: "attack",
+          data: JSON.stringify(attackData),
+          id: 0,
+        },
+        BOT_ID
+      );
+    }
+  } catch (err) {
+    console.error("Error making bot move:", err);
+  }
+}
+
+// Get adjacent cells for a position
+function getAdjacentCells(x, y) {
+  return [
+    { x: x + 1, y },
+    { x: x - 1, y },
+    { x, y: y + 1 },
+    { x, y: y - 1 },
+  ];
+}
