@@ -149,13 +149,12 @@ function handleRegistration(ws, data, clientId) {
       const errorResponse = {
         type: "reg",
         data: JSON.stringify({
-          // Stringify the data object
           name: "",
           index: "-1",
           error: true,
           errorText: "Invalid data format",
         }),
-        id: data.id,
+        id: 0, // Always use 0 as per protocol
       };
       ws.send(JSON.stringify(errorResponse));
       return;
@@ -170,13 +169,12 @@ function handleRegistration(ws, data, clientId) {
       const errorResponse = {
         type: "reg",
         data: JSON.stringify({
-          // Stringify the data object
           name: "",
           index: "-1",
           error: true,
           errorText: "Invalid registration data format",
         }),
-        id: data.id,
+        id: 0, // Always use 0 as per protocol
       };
       ws.send(JSON.stringify(errorResponse));
       return;
@@ -195,13 +193,12 @@ function handleRegistration(ws, data, clientId) {
       const errorResponse = {
         type: "reg",
         data: JSON.stringify({
-          // Stringify the data object
           name: "",
           index: "-1",
           error: true,
           errorText: "Name is required and must be a non-empty string",
         }),
-        id: data.id,
+        id: 0, // Always use 0 as per protocol
       };
       ws.send(JSON.stringify(errorResponse));
       return;
@@ -211,13 +208,12 @@ function handleRegistration(ws, data, clientId) {
     const response = {
       type: "reg",
       data: JSON.stringify({
-        // Stringify the data object
         name: playerData.name.trim(),
         index: clientId,
         error: false,
         errorText: "",
       }),
-      id: data.id,
+      id: 0, // Always use 0 as per protocol
     };
 
     console.log(`Sending registration response to ${clientId}:`, response);
@@ -228,13 +224,12 @@ function handleRegistration(ws, data, clientId) {
       const errorResponse = {
         type: "reg",
         data: JSON.stringify({
-          // Stringify the data object
           name: "",
           index: "-1",
           error: true,
           errorText: "Invalid registration data",
         }),
-        id: data.id || 0,
+        id: 0, // Always use 0 as per protocol
       };
       ws.send(JSON.stringify(errorResponse));
     }
