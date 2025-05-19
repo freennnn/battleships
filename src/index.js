@@ -17,7 +17,10 @@ const wss = new WebSocketServer({
 });
 
 // Store connected clients with their states
-const clients = new Map();
+const clients = new Map(); // Key: clientId (string), Value: { ws: WebSocket, username: string | null, isAlive: boolean, lastActivity: number, roomId: string | null }
+
+// Store user accounts (login, password, wins)
+const users = new Map(); // Key: username (string), Value: { password: string, wins: number }
 
 // Store game rooms
 const rooms = new Map();
@@ -39,14 +42,13 @@ wss.on("connection", (ws, req) => {
   // Store client with its state
   clients.set(clientId, {
     ws,
+    username: null, // Will be set during registration
     isAlive: true,
     lastActivity: Date.now(),
-    name: "", // Will be set during registration
     roomId: null, // Will be set when joining a room
-    wins: 0, // Track wins
   });
 
-  // Send current winners list to new client
+  // Send current winners list to new client (will be updated to use 'users' map)
   sendWinnersUpdate(ws);
 
   // Set keep-alive
@@ -157,11 +159,7 @@ wss.on("connection", (ws, req) => {
           }
         }
       }
-      // Remove from winners if they were in the list
-      if (client.name) {
-        winners.delete(client.name);
-        broadcastWinnersUpdate();
-      }
+      // No longer need to remove from a separate 'winners' map
       client.isAlive = false;
       clients.delete(clientId);
     }
@@ -187,91 +185,136 @@ function handleRegistration(ws, data, clientId) {
 
     console.log(`Registration data from ${clientId}:`, data);
 
-    // Parse data.data if it's a string, otherwise use as is
-    let playerData;
+    let playerRegData;
     try {
-      playerData =
+      playerRegData =
         typeof data.data === "string" ? JSON.parse(data.data) : data.data;
-      console.log(`Parsed player data from ${clientId}:`, playerData);
+      console.log(
+        `Parsed player registration data from ${clientId}:`,
+        playerRegData
+      );
     } catch (parseError) {
       console.error(
-        `Failed to parse player data from ${clientId}:`,
+        `Failed to parse player registration data from ${clientId}:`,
         parseError
       );
-      const errorResponse = {
-        type: "reg",
-        data: JSON.stringify({
-          name: "",
-          index: "-1",
-          error: true,
-          errorText: "Invalid data format",
-        }),
-        id: 0, // Always use 0 as per protocol
-      };
-      ws.send(JSON.stringify(errorResponse));
-      return;
-    }
-
-    // Check if playerData exists and has required fields
-    if (!playerData || typeof playerData !== "object") {
-      console.log(
-        `Invalid registration data from ${clientId} - data is not an object:`,
-        playerData
+      ws.send(
+        JSON.stringify({
+          type: "reg",
+          data: JSON.stringify({
+            name: "",
+            index: "-1",
+            error: true,
+            errorText: "Invalid data format",
+          }),
+          id: 0,
+        })
       );
-      const errorResponse = {
-        type: "reg",
-        data: JSON.stringify({
-          name: "",
-          index: "-1",
-          error: true,
-          errorText: "Invalid registration data format",
-        }),
-        id: 0, // Always use 0 as per protocol
-      };
-      ws.send(JSON.stringify(errorResponse));
       return;
     }
 
-    // Validate name
     if (
-      !playerData.name ||
-      typeof playerData.name !== "string" ||
-      playerData.name.trim() === ""
+      !playerRegData ||
+      typeof playerRegData !== "object" ||
+      !playerRegData.name ||
+      typeof playerRegData.name !== "string" ||
+      playerRegData.name.trim() === "" ||
+      !playerRegData.password ||
+      typeof playerRegData.password !== "string" ||
+      playerRegData.password === ""
     ) {
       console.log(
-        `Invalid registration data from ${clientId} - invalid name:`,
-        playerData.name
+        `Invalid registration data from ${clientId} - missing name/password or invalid format:`,
+        playerRegData
       );
-      const errorResponse = {
-        type: "reg",
-        data: JSON.stringify({
-          name: "",
-          index: "-1",
-          error: true,
-          errorText: "Name is required and must be a non-empty string",
-        }),
-        id: 0, // Always use 0 as per protocol
-      };
-      ws.send(JSON.stringify(errorResponse));
+      ws.send(
+        JSON.stringify({
+          type: "reg",
+          data: JSON.stringify({
+            name: playerRegData.name || "",
+            index: "-1",
+            error: true,
+            errorText:
+              "Name and password are required and must be non-empty strings",
+          }),
+          id: 0,
+        })
+      );
       return;
     }
 
-    // Update client with name
-    const client = clients.get(clientId);
-    if (client) {
-      client.name = playerData.name.trim();
+    const providedName = playerRegData.name.trim();
+    const providedPassword = playerRegData.password; // Passwords should generally not be trimmed
+
+    const currentClient = clients.get(clientId);
+    if (!currentClient) {
+      console.error(
+        `Client ${clientId} not found in clients map during registration.`
+      );
+      // This should ideally not happen if client was just added
+      ws.send(
+        JSON.stringify({
+          type: "reg",
+          data: JSON.stringify({
+            name: providedName,
+            index: "-1",
+            error: true,
+            errorText: "Internal server error",
+          }),
+          id: 0,
+        })
+      );
+      return;
     }
 
-    // Create response object with stringified data
-    const response = {
-      type: "reg",
-      data: JSON.stringify({
-        name: playerData.name.trim(),
+    let responseData;
+
+    if (users.has(providedName)) {
+      // Existing user - Login attempt
+      const userAccount = users.get(providedName);
+      if (userAccount.password === providedPassword) {
+        // Password matches - Login success
+        currentClient.username = providedName;
+        console.log(`User ${providedName} logged in for client ${clientId}`);
+        responseData = {
+          name: providedName,
+          index: clientId,
+          error: false,
+          errorText: "",
+        };
+      } else {
+        // Password mismatch
+        console.log(
+          `Invalid password for user ${providedName} from client ${clientId}`
+        );
+        responseData = {
+          name: providedName,
+          index: "-1",
+          error: true,
+          errorText: "Invalid password",
+        };
+      }
+    } else {
+      // New user - Registration attempt
+      users.set(providedName, { password: providedPassword, wins: 0 });
+      currentClient.username = providedName;
+      console.log(
+        `User ${providedName} registered and logged in for client ${clientId}`
+      );
+      responseData = {
+        name: providedName,
         index: clientId,
         error: false,
         errorText: "",
-      }),
-      id: 0, // Always use 0 as per protocol
+      };
+      // New user registered, update all clients with the new winners list (which will include the new user with 0 wins)
+      broadcastWinnersUpdate();
+    }
+
+    const response = {
+      type: "reg",
+      data: JSON.stringify(responseData),
+      id: 0,
     };
 
     console.log(`Sending registration response to ${clientId}:`, response);
@@ -279,17 +322,18 @@ function handleRegistration(ws, data, clientId) {
   } catch (err) {
     console.error(`Error in registration for ${clientId}:`, err);
     if (ws.readyState === ws.OPEN) {
-      const errorResponse = {
-        type: "reg",
-        data: JSON.stringify({
-          name: "",
-          index: "-1",
-          error: true,
-          errorText: "Invalid registration data",
-        }),
-        id: 0, // Always use 0 as per protocol
-      };
-      ws.send(JSON.stringify(errorResponse));
+      ws.send(
+        JSON.stringify({
+          type: "reg",
+          data: JSON.stringify({
+            name: "",
+            index: "-1",
+            error: true,
+            errorText: "Error processing registration",
+          }),
+          id: 0,
+        })
+      );
     }
   }
 }
@@ -298,8 +342,8 @@ function handleRegistration(ws, data, clientId) {
 function handleCreateRoom(ws, clientId) {
   try {
     const client = clients.get(clientId);
-    if (!client || !client.name) {
-      console.log(`Client ${clientId} not registered`);
+    if (!client || !client.username) {
+      console.log(`Client ${clientId} not registered or username missing`);
       return;
     }
 
@@ -309,7 +353,7 @@ function handleCreateRoom(ws, clientId) {
       id: roomId,
       users: [
         {
-          name: client.name,
+          name: client.username,
           index: clientId,
         },
       ],
@@ -322,7 +366,9 @@ function handleCreateRoom(ws, clientId) {
     // Broadcast room update to all clients
     broadcastRoomUpdate();
 
-    console.log(`Room ${roomId} created by ${clientId}`);
+    console.log(
+      `Room ${roomId} created by ${client.username} (Client ID: ${clientId})`
+    );
   } catch (err) {
     console.error(`Error creating room for ${clientId}:`, err);
   }
@@ -332,8 +378,8 @@ function handleCreateRoom(ws, clientId) {
 function handleAddUserToRoom(ws, data, clientId) {
   try {
     const client = clients.get(clientId);
-    if (!client || !client.name) {
-      console.log(`Client ${clientId} not registered`);
+    if (!client || !client.username) {
+      console.log(`Client ${clientId} not registered or username missing`);
       return;
     }
 
@@ -362,7 +408,7 @@ function handleAddUserToRoom(ws, data, clientId) {
 
     // Add user to room
     room.users.push({
-      name: client.name,
+      name: client.username,
       index: clientId,
     });
 
@@ -377,7 +423,9 @@ function handleAddUserToRoom(ws, data, clientId) {
     // Broadcast room update to all clients
     broadcastRoomUpdate();
 
-    console.log(`User ${clientId} added to room ${roomId}`);
+    console.log(
+      `User ${client.username} (Client ID: ${clientId}) added to room ${roomId}`
+    );
   } catch (err) {
     console.error(`Error adding user to room for ${clientId}:`, err);
   }
@@ -435,8 +483,10 @@ function createSinglePlayerGame(clientId) {
     const gameId = Date.now().toString();
     const client = clients.get(clientId);
 
-    if (!client) {
-      console.log(`Client ${clientId} not found`);
+    if (!client || !client.username) {
+      console.log(
+        `Client ${clientId} not found or not registered with a username`
+      );
       return;
     }
 
@@ -446,7 +496,7 @@ function createSinglePlayerGame(clientId) {
       players: [
         {
           id: clientId,
-          name: client.name,
+          name: client.username,
           ships: [],
           board: Array(10)
             .fill()
@@ -484,7 +534,9 @@ function createSinglePlayerGame(clientId) {
       client.ws.send(JSON.stringify(response));
     }
 
-    console.log(`Single player game ${gameId} created for player ${clientId}`);
+    console.log(
+      `Single player game ${gameId} created for player ${client.username} (Client ID: ${clientId})`
+    );
   } catch (err) {
     console.error(`Error creating single player game for ${clientId}:`, err);
   }
@@ -1191,10 +1243,27 @@ function endGame(game, winnerId) {
     console.log(`Game ${game.id} ending, winner: ${winnerId}`);
 
     // Update winner's stats
-    const winner = clients.get(winnerId);
-    if (winner) {
-      winner.wins = (winner.wins || 0) + 1;
-      winners.set(winner.name, winner.wins);
+    const winnerClient = clients.get(winnerId);
+    if (winnerClient && winnerClient.username) {
+      const userAccount = users.get(winnerClient.username);
+      if (userAccount) {
+        userAccount.wins = (userAccount.wins || 0) + 1;
+        users.set(winnerClient.username, userAccount); // Re-set to update the map entry
+        console.log(
+          `User ${winnerClient.username} wins updated to: ${userAccount.wins}`
+        );
+      } else {
+        console.error(
+          `User account not found for username: ${winnerClient.username} during endGame`
+        );
+      }
+    } else if (winnerId === BOT_ID) {
+      // Bot won, no user stats to update for bot
+      console.log("Bot won the game.");
+    } else {
+      console.error(
+        `Winner client not found or username missing for winnerId: ${winnerId}`
+      );
     }
 
     // Notify both players
@@ -1269,10 +1338,12 @@ function broadcastRoomUpdate() {
 function sendWinnersUpdate(ws) {
   try {
     if (ws.readyState === ws.OPEN) {
-      const winnersList = Array.from(winners.entries()).map(([name, wins]) => ({
-        name,
-        wins,
-      }));
+      const winnersList = Array.from(users.entries()).map(
+        ([name, userData]) => ({
+          name,
+          wins: userData.wins,
+        })
+      );
 
       const response = {
         type: "update_winners",
@@ -1289,9 +1360,9 @@ function sendWinnersUpdate(ws) {
 // Broadcast winners update to all clients
 function broadcastWinnersUpdate() {
   try {
-    const winnersList = Array.from(winners.entries()).map(([name, wins]) => ({
+    const winnersList = Array.from(users.entries()).map(([name, userData]) => ({
       name,
-      wins,
+      wins: userData.wins,
     }));
 
     const response = {
@@ -1300,9 +1371,13 @@ function broadcastWinnersUpdate() {
       id: 0,
     };
 
-    wss.clients.forEach((client) => {
-      if (client.readyState === client.OPEN) {
-        client.send(JSON.stringify(response));
+    wss.clients.forEach((clientWs) => {
+      // Note: wss.clients gives all connected WebSockets
+      // We need to ensure the WebSocket belongs to a client managed by our `clients` map
+      // and that it's open. A simple check for ws.OPEN is usually sufficient here if
+      // ws from wss.clients are the same instances stored in our clients map.
+      if (clientWs.readyState === clientWs.OPEN) {
+        clientWs.send(JSON.stringify(response));
       }
     });
 
