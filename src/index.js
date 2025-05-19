@@ -19,6 +19,9 @@ const wss = new WebSocketServer({
 // Store connected clients with their states
 const clients = new Map();
 
+// Store game rooms
+const rooms = new Map();
+
 // Handle new connections
 wss.on("connection", (ws, req) => {
   const clientId = Date.now().toString();
@@ -29,6 +32,8 @@ wss.on("connection", (ws, req) => {
     ws,
     isAlive: true,
     lastActivity: Date.now(),
+    name: "", // Will be set during registration
+    roomId: null, // Will be set when joining a room
   });
 
   // Set keep-alive
@@ -75,7 +80,12 @@ wss.on("connection", (ws, req) => {
         case "reg":
           handleRegistration(ws, data, clientId);
           break;
-
+        case "create_room":
+          handleCreateRoom(ws, clientId);
+          break;
+        case "add_user_to_room":
+          handleAddUserToRoom(ws, data, clientId);
+          break;
         default:
           console.log(`Unknown message type from ${clientId}:`, data.type);
           if (ws.readyState === ws.OPEN) {
@@ -110,6 +120,18 @@ wss.on("connection", (ws, req) => {
     console.log(`Client ${clientId} disconnected`);
     const client = clients.get(clientId);
     if (client) {
+      // If client was in a room, remove them and update room state
+      if (client.roomId) {
+        const room = rooms.get(client.roomId);
+        if (room) {
+          room.users = room.users.filter((user) => user.index !== clientId);
+          if (room.users.length === 0) {
+            rooms.delete(client.roomId);
+          } else {
+            broadcastRoomUpdate();
+          }
+        }
+      }
       client.isAlive = false;
       clients.delete(clientId);
     }
@@ -204,6 +226,12 @@ function handleRegistration(ws, data, clientId) {
       return;
     }
 
+    // Update client with name
+    const client = clients.get(clientId);
+    if (client) {
+      client.name = playerData.name.trim();
+    }
+
     // Create response object with stringified data
     const response = {
       type: "reg",
@@ -233,6 +261,152 @@ function handleRegistration(ws, data, clientId) {
       };
       ws.send(JSON.stringify(errorResponse));
     }
+  }
+}
+
+// Handle room creation
+function handleCreateRoom(ws, clientId) {
+  try {
+    const client = clients.get(clientId);
+    if (!client || !client.name) {
+      console.log(`Client ${clientId} not registered`);
+      return;
+    }
+
+    // Create new room
+    const roomId = Date.now().toString();
+    const room = {
+      id: roomId,
+      users: [
+        {
+          name: client.name,
+          index: clientId,
+        },
+      ],
+    };
+    rooms.set(roomId, room);
+
+    // Update client's room
+    client.roomId = roomId;
+
+    // Broadcast room update to all clients
+    broadcastRoomUpdate();
+
+    console.log(`Room ${roomId} created by ${clientId}`);
+  } catch (err) {
+    console.error(`Error creating room for ${clientId}:`, err);
+  }
+}
+
+// Handle adding user to room
+function handleAddUserToRoom(ws, data, clientId) {
+  try {
+    const client = clients.get(clientId);
+    if (!client || !client.name) {
+      console.log(`Client ${clientId} not registered`);
+      return;
+    }
+
+    // Parse room index
+    let roomData;
+    try {
+      roomData =
+        typeof data.data === "string" ? JSON.parse(data.data) : data.data;
+    } catch (parseError) {
+      console.error(`Failed to parse room data from ${clientId}:`, parseError);
+      return;
+    }
+
+    const roomId = roomData.indexRoom;
+    const room = rooms.get(roomId);
+
+    if (!room) {
+      console.log(`Room ${roomId} not found`);
+      return;
+    }
+
+    if (room.users.length >= 2) {
+      console.log(`Room ${roomId} is full`);
+      return;
+    }
+
+    // Add user to room
+    room.users.push({
+      name: client.name,
+      index: clientId,
+    });
+
+    // Update client's room
+    client.roomId = roomId;
+
+    // If room is full, create game
+    if (room.users.length === 2) {
+      createGame(room);
+    }
+
+    // Broadcast room update to all clients
+    broadcastRoomUpdate();
+
+    console.log(`User ${clientId} added to room ${roomId}`);
+  } catch (err) {
+    console.error(`Error adding user to room for ${clientId}:`, err);
+  }
+}
+
+// Create game when room is full
+function createGame(room) {
+  try {
+    const gameId = Date.now().toString();
+
+    // Notify both players
+    room.users.forEach((user, index) => {
+      const client = clients.get(user.index);
+      if (client && client.ws.readyState === client.ws.OPEN) {
+        const response = {
+          type: "create_game",
+          data: JSON.stringify({
+            idGame: gameId,
+            idPlayer: user.index,
+          }),
+          id: 0,
+        };
+        client.ws.send(JSON.stringify(response));
+      }
+    });
+
+    console.log(`Game ${gameId} created for room ${room.id}`);
+  } catch (err) {
+    console.error(`Error creating game for room ${room.id}:`, err);
+  }
+}
+
+// Broadcast room updates to all clients
+function broadcastRoomUpdate() {
+  try {
+    // Create room list with only rooms that have one player
+    const roomList = Array.from(rooms.values())
+      .filter((room) => room.users.length === 1)
+      .map((room) => ({
+        roomId: room.id,
+        roomUsers: room.users,
+      }));
+
+    const response = {
+      type: "update_room",
+      data: JSON.stringify(roomList),
+      id: 0,
+    };
+
+    // Send to all connected clients
+    wss.clients.forEach((client) => {
+      if (client.readyState === client.OPEN) {
+        client.send(JSON.stringify(response));
+      }
+    });
+
+    console.log("Room update broadcasted");
+  } catch (err) {
+    console.error("Error broadcasting room update:", err);
   }
 }
 
