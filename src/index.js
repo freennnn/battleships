@@ -1,5 +1,5 @@
-import { WebSocketServer } from "ws";
 import http from "http";
+import { WebSocketServer } from "ws";
 
 // Create HTTP server
 const server = http.createServer((req, res) => {
@@ -177,9 +177,7 @@ server.on("upgrade", (request, socket, head) => {
 function handleRegistration(ws, data, clientId) {
   try {
     if (ws.readyState !== ws.OPEN) {
-      console.log(
-        `Cannot send registration response - client ${clientId} is not open`
-      );
+      console.log(`Cannot send registration response - client ${clientId} is not open`);
       return;
     }
 
@@ -187,17 +185,10 @@ function handleRegistration(ws, data, clientId) {
 
     let playerRegData;
     try {
-      playerRegData =
-        typeof data.data === "string" ? JSON.parse(data.data) : data.data;
-      console.log(
-        `Parsed player registration data from ${clientId}:`,
-        playerRegData
-      );
+      playerRegData = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
+      console.log(`Parsed player registration data from ${clientId}:`, playerRegData);
     } catch (parseError) {
-      console.error(
-        `Failed to parse player registration data from ${clientId}:`,
-        parseError
-      );
+      console.error(`Failed to parse player registration data from ${clientId}:`, parseError);
       ws.send(
         JSON.stringify({
           type: "reg",
@@ -234,8 +225,7 @@ function handleRegistration(ws, data, clientId) {
             name: playerRegData.name || "",
             index: "-1",
             error: true,
-            errorText:
-              "Name and password are required and must be non-empty strings",
+            errorText: "Name and password are required and must be non-empty strings",
           }),
           id: 0,
         })
@@ -248,9 +238,7 @@ function handleRegistration(ws, data, clientId) {
 
     const currentClient = clients.get(clientId);
     if (!currentClient) {
-      console.error(
-        `Client ${clientId} not found in clients map during registration.`
-      );
+      console.error(`Client ${clientId} not found in clients map during registration.`);
       // This should ideally not happen if client was just added
       ws.send(
         JSON.stringify({
@@ -284,9 +272,7 @@ function handleRegistration(ws, data, clientId) {
         };
       } else {
         // Password mismatch
-        console.log(
-          `Invalid password for user ${providedName} from client ${clientId}`
-        );
+        console.log(`Invalid password for user ${providedName} from client ${clientId}`);
         responseData = {
           name: providedName,
           index: "-1",
@@ -298,9 +284,7 @@ function handleRegistration(ws, data, clientId) {
       // New user - Registration attempt
       users.set(providedName, { password: providedPassword, wins: 0 });
       currentClient.username = providedName;
-      console.log(
-        `User ${providedName} registered and logged in for client ${clientId}`
-      );
+      console.log(`User ${providedName} registered and logged in for client ${clientId}`);
       responseData = {
         name: providedName,
         index: clientId,
@@ -366,9 +350,7 @@ function handleCreateRoom(ws, clientId) {
     // Broadcast room update to all clients
     broadcastRoomUpdate();
 
-    console.log(
-      `Room ${roomId} created by ${client.username} (Client ID: ${clientId})`
-    );
+    console.log(`Room ${roomId} created by ${client.username} (Client ID: ${clientId})`);
   } catch (err) {
     console.error(`Error creating room for ${clientId}:`, err);
   }
@@ -386,8 +368,7 @@ function handleAddUserToRoom(ws, data, clientId) {
     // Parse room index
     let roomData;
     try {
-      roomData =
-        typeof data.data === "string" ? JSON.parse(data.data) : data.data;
+      roomData = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
     } catch (parseError) {
       console.error(`Failed to parse room data from ${clientId}:`, parseError);
       return;
@@ -423,9 +404,7 @@ function handleAddUserToRoom(ws, data, clientId) {
     // Broadcast room update to all clients
     broadcastRoomUpdate();
 
-    console.log(
-      `User ${client.username} (Client ID: ${clientId}) added to room ${roomId}`
-    );
+    console.log(`User ${client.username} (Client ID: ${clientId}) added to room ${roomId}`);
   } catch (err) {
     console.error(`Error adding user to room for ${clientId}:`, err);
   }
@@ -484,9 +463,7 @@ function createSinglePlayerGame(clientId) {
     const client = clients.get(clientId);
 
     if (!client || !client.username) {
-      console.log(
-        `Client ${clientId} not found or not registered with a username`
-      );
+      console.log(`Client ${clientId} not found or not registered with a username`);
       return;
     }
 
@@ -548,8 +525,7 @@ function handleAddShips(ws, data, clientId) {
     // Parse ships data
     let shipsData;
     try {
-      shipsData =
-        typeof data.data === "string" ? JSON.parse(data.data) : data.data;
+      shipsData = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
     } catch (parseError) {
       console.error(`Failed to parse ships data from ${clientId}:`, parseError);
       return;
@@ -651,12 +627,8 @@ function validateShips(ships) {
     shipCounts[ship.type]++;
 
     // Check if ship is within board bounds
-    const maxX = ship.direction
-      ? ship.position.x
-      : ship.position.x + ship.length - 1;
-    const maxY = ship.direction
-      ? ship.position.y + ship.length - 1
-      : ship.position.y;
+    const maxX = ship.direction ? ship.position.x : ship.position.x + ship.length - 1;
+    const maxY = ship.direction ? ship.position.y + ship.length - 1 : ship.position.y;
     if (maxX >= 10 || maxY >= 10) {
       return false;
     }
@@ -745,9 +717,7 @@ function generateBotShips() {
         if (!fitsOnBoard) continue;
 
         // Check 2: Direct overlap with existing ships on the temporary board
-        const overlapsDirectly = newShipCells.some(
-          (cell) => board[cell.y][cell.x] === "ship"
-        );
+        const overlapsDirectly = newShipCells.some((cell) => board[cell.y][cell.x] === "ship");
         if (overlapsDirectly) continue;
 
         // Check 3: Adjacency with existing ships on the temporary board
@@ -795,9 +765,7 @@ function generateBotShips() {
         .join(" ")
   );
   board.forEach((row, y) => {
-    console.log(
-      `${y} ${row.map((cell) => (cell === "ship" ? "S" : ".")).join(" ")}`
-    );
+    console.log(`${y} ${row.map((cell) => (cell === "ship" ? "S" : ".")).join(" ")}`);
   });
   console.log("=== End Bot's Board State ===\n");
 
@@ -810,13 +778,9 @@ function handleAttack(ws, data, clientId) {
     // Parse attack data
     let attackData;
     try {
-      attackData =
-        typeof data.data === "string" ? JSON.parse(data.data) : data.data;
+      attackData = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
     } catch (parseError) {
-      console.error(
-        `Failed to parse attack data from ${clientId}:`,
-        parseError
-      );
+      console.error(`Failed to parse attack data from ${clientId}:`, parseError);
       return;
     }
 
@@ -939,10 +903,7 @@ function handleAttack(ws, data, clientId) {
 function processAttack(player, x, y) {
   // Check if cell was already attacked
   if (player.board[y][x] !== null) {
-    console.log(
-      `Cell (${x}, ${y}) already attacked with status:`,
-      player.board[y][x]
-    );
+    console.log(`Cell (${x}, ${y}) already attacked with status:`, player.board[y][x]);
     return { status: "miss" };
   }
 
@@ -960,10 +921,7 @@ function processAttack(player, x, y) {
 
       // Check if ship is killed (all cells are hit)
       const isKilled = shipCells.every((cell) => {
-        return (
-          player.board[cell.y][cell.x] === "hit" ||
-          player.board[cell.y][cell.x] === "killed"
-        );
+        return player.board[cell.y][cell.x] === "hit" || player.board[cell.y][cell.x] === "killed";
       });
 
       console.log(`Ship state:`, {
@@ -1018,9 +976,7 @@ function getShipCells(ship) {
 // Send miss for cells surrounding a killed ship
 function sendSurroundingMisses(game, ship) {
   const surroundingCells = getSurroundingCells(ship);
-  const targetPlayer = game.players.find(
-    (p) => p.id !== game.currentPlayerIndex
-  );
+  const targetPlayer = game.players.find((p) => p.id !== game.currentPlayerIndex);
 
   // First update the board state on the server
   surroundingCells.forEach((cell) => {
@@ -1113,13 +1069,9 @@ function handleRandomAttack(ws, data, clientId) {
     // Parse random attack data
     let randomAttackData;
     try {
-      randomAttackData =
-        typeof data.data === "string" ? JSON.parse(data.data) : data.data;
+      randomAttackData = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
     } catch (parseError) {
-      console.error(
-        `Failed to parse random attack data from ${clientId}:`,
-        parseError
-      );
+      console.error(`Failed to parse random attack data from ${clientId}:`, parseError);
       return;
     }
 
@@ -1158,20 +1110,11 @@ function handleRandomAttack(ws, data, clientId) {
       y,
       indexPlayer,
     };
-    handleAttack(
-      ws,
-      { type: "attack", data: JSON.stringify(attackRequest), id: 0 },
-      clientId
-    );
+    handleAttack(ws, { type: "attack", data: JSON.stringify(attackRequest), id: 0 }, clientId);
 
-    console.log(
-      `Random attack processed for player ${indexPlayer} in game ${gameId}`
-    );
+    console.log(`Random attack processed for player ${indexPlayer} in game ${gameId}`);
   } catch (err) {
-    console.error(
-      `Error processing random attack for player ${clientId}:`,
-      err
-    );
+    console.error(`Error processing random attack for player ${clientId}:`, err);
   }
 }
 
@@ -1225,9 +1168,7 @@ function checkGameOver(player) {
   // Check if all ships are completely destroyed
   const isGameOver = player.ships.every((ship) => {
     const shipCells = getShipCells(ship);
-    const isShipDestroyed = shipCells.every(
-      (cell) => player.board[cell.y][cell.x] === "killed"
-    );
+    const isShipDestroyed = shipCells.every((cell) => player.board[cell.y][cell.x] === "killed");
     console.log(`Ship ${ship.type} destroyed:`, isShipDestroyed);
     return isShipDestroyed;
   });
@@ -1249,9 +1190,7 @@ function endGame(game, winnerId) {
       if (userAccount) {
         userAccount.wins = (userAccount.wins || 0) + 1;
         users.set(winnerClient.username, userAccount); // Re-set to update the map entry
-        console.log(
-          `User ${winnerClient.username} wins updated to: ${userAccount.wins}`
-        );
+        console.log(`User ${winnerClient.username} wins updated to: ${userAccount.wins}`);
       } else {
         console.error(
           `User account not found for username: ${winnerClient.username} during endGame`
@@ -1261,9 +1200,7 @@ function endGame(game, winnerId) {
       // Bot won, no user stats to update for bot
       console.log("Bot won the game.");
     } else {
-      console.error(
-        `Winner client not found or username missing for winnerId: ${winnerId}`
-      );
+      console.error(`Winner client not found or username missing for winnerId: ${winnerId}`);
     }
 
     // Notify both players
@@ -1338,12 +1275,10 @@ function broadcastRoomUpdate() {
 function sendWinnersUpdate(ws) {
   try {
     if (ws.readyState === ws.OPEN) {
-      const winnersList = Array.from(users.entries()).map(
-        ([name, userData]) => ({
-          name,
-          wins: userData.wins,
-        })
-      );
+      const winnersList = Array.from(users.entries()).map(([name, userData]) => ({
+        name,
+        wins: userData.wins,
+      }));
 
       const response = {
         type: "update_winners",
@@ -1446,8 +1381,7 @@ function makeBotMove(game) {
       );
 
       if (validCells.length > 0) {
-        const randomCell =
-          validCells[Math.floor(Math.random() * validCells.length)];
+        const randomCell = validCells[Math.floor(Math.random() * validCells.length)];
         x = randomCell.x;
         y = randomCell.y;
       } else {

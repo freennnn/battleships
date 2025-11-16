@@ -1,142 +1,141 @@
-import { Room, RoomListItem } from "../types/room.types.js";
+import type { Room, RoomListItem } from "../types/room.types.js";
 
 /**
  * Manages game rooms and their state
  */
 export class RoomManager {
-    private rooms: Map<string, Room>;
+  private rooms: Map<string, Room>;
 
-    constructor() {
-        this.rooms = new Map();
+  constructor() {
+    this.rooms = new Map();
+  }
+
+  /**
+   * Create a new room with a user as host
+   */
+  createRoom(roomId: string, userId: string, username: string): Room {
+    const room: Room = {
+      id: roomId,
+      users: [
+        {
+          name: username,
+          index: userId,
+        },
+      ],
+    };
+
+    this.rooms.set(roomId, room);
+    console.log(`Room ${roomId} created by ${username} (User ID: ${userId})`);
+    return room;
+  }
+
+  /**
+   * Add a user to an existing room
+   * Returns true if successful, false if room is full or doesn't exist
+   */
+  addUserToRoom(roomId: string, userId: string, username: string): boolean {
+    const room = this.rooms.get(roomId);
+
+    if (!room) {
+      console.log(`Room ${roomId} not found`);
+      return false;
     }
 
-    /**
-     * Create a new room with a user as host
-     */
-    createRoom(roomId: string, userId: string, username: string): Room {
-        const room: Room = {
-            id: roomId,
-            users: [
-                {
-                    name: username,
-                    index: userId,
-                },
-            ],
-        };
-
-        this.rooms.set(roomId, room);
-        console.log(`Room ${roomId} created by ${username} (User ID: ${userId})`);
-        return room;
+    if (room.users.length >= 2) {
+      console.log(`Room ${roomId} is full`);
+      return false;
     }
 
-    /**
-     * Add a user to an existing room
-     * Returns true if successful, false if room is full or doesn't exist
-     */
-    addUserToRoom(roomId: string, userId: string, username: string): boolean {
-        const room = this.rooms.get(roomId);
+    room.users.push({
+      name: username,
+      index: userId,
+    });
 
-        if (!room) {
-            console.log(`Room ${roomId} not found`);
-            return false;
-        }
+    console.log(`User ${username} (User ID: ${userId}) added to room ${roomId}`);
+    return true;
+  }
 
-        if (room.users.length >= 2) {
-            console.log(`Room ${roomId} is full`);
-            return false;
-        }
+  /**
+   * Remove a user from a room
+   * If room becomes empty, it's automatically deleted
+   */
+  removeUserFromRoom(roomId: string, userId: string): boolean {
+    const room = this.rooms.get(roomId);
 
-        room.users.push({
-            name: username,
-            index: userId,
-        });
-
-        console.log(`User ${username} (User ID: ${userId}) added to room ${roomId}`);
-        return true;
+    if (!room) {
+      return false;
     }
 
-    /**
-     * Remove a user from a room
-     * If room becomes empty, it's automatically deleted
-     */
-    removeUserFromRoom(roomId: string, userId: string): boolean {
-        const room = this.rooms.get(roomId);
+    const initialLength = room.users.length;
+    room.users = room.users.filter((user) => user.index !== userId);
 
-        if (!room) {
-            return false;
-        }
-
-        const initialLength = room.users.length;
-        room.users = room.users.filter((user) => user.index !== userId);
-
-        if (room.users.length === 0) {
-            this.rooms.delete(roomId);
-            console.log(`Room ${roomId} deleted (no users left)`);
-        }
-
-        return room.users.length < initialLength;
+    if (room.users.length === 0) {
+      this.rooms.delete(roomId);
+      console.log(`Room ${roomId} deleted (no users left)`);
     }
 
-    /**
-     * Get a room by ID
-     */
-    getRoomById(roomId: string): Room | undefined {
-        return this.rooms.get(roomId);
-    }
+    return room.users.length < initialLength;
+  }
 
-    /**
-     * Check if a room exists
-     */
-    roomExists(roomId: string): boolean {
-        return this.rooms.has(roomId);
-    }
+  /**
+   * Get a room by ID
+   */
+  getRoomById(roomId: string): Room | undefined {
+    return this.rooms.get(roomId);
+  }
 
-    /**
-     * Check if a room is full (2 players)
-     */
-    isRoomFull(roomId: string): boolean {
-        const room = this.rooms.get(roomId);
-        return room ? room.users.length >= 2 : false;
-    }
+  /**
+   * Check if a room exists
+   */
+  roomExists(roomId: string): boolean {
+    return this.rooms.has(roomId);
+  }
 
-    /**
-     * Get all available rooms (rooms with only 1 player waiting)
-     */
-    getAvailableRooms(): RoomListItem[] {
-        return Array.from(this.rooms.values())
-            .filter((room) => room.users.length === 1)
-            .map((room) => ({
-                roomId: room.id,
-                roomUsers: room.users,
-            }));
-    }
+  /**
+   * Check if a room is full (2 players)
+   */
+  isRoomFull(roomId: string): boolean {
+    const room = this.rooms.get(roomId);
+    return room ? room.users.length >= 2 : false;
+  }
 
-    /**
-     * Delete a room
-     */
-    deleteRoom(roomId: string): boolean {
-        return this.rooms.delete(roomId);
-    }
+  /**
+   * Get all available rooms (rooms with only 1 player waiting)
+   */
+  getAvailableRooms(): RoomListItem[] {
+    return Array.from(this.rooms.values())
+      .filter((room) => room.users.length === 1)
+      .map((room) => ({
+        roomId: room.id,
+        roomUsers: room.users,
+      }));
+  }
 
-    /**
-     * Get the number of active rooms
-     */
-    getRoomCount(): number {
-        return this.rooms.size;
-    }
+  /**
+   * Delete a room
+   */
+  deleteRoom(roomId: string): boolean {
+    return this.rooms.delete(roomId);
+  }
 
-    /**
-     * Get all rooms (for debugging)
-     */
-    getAllRooms(): Room[] {
-        return Array.from(this.rooms.values());
-    }
+  /**
+   * Get the number of active rooms
+   */
+  getRoomCount(): number {
+    return this.rooms.size;
+  }
 
-    /**
-     * Clear all rooms (for testing)
-     */
-    clearAllRooms(): void {
-        this.rooms.clear();
-    }
+  /**
+   * Get all rooms (for debugging)
+   */
+  getAllRooms(): Room[] {
+    return Array.from(this.rooms.values());
+  }
+
+  /**
+   * Clear all rooms (for testing)
+   */
+  clearAllRooms(): void {
+    this.rooms.clear();
+  }
 }
-
