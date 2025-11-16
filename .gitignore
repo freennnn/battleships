@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+ui/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+ui/package-lock.json
+ui/yarn.lock
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Build output
+dist/
+build/
+coverage/
+ui/dist/
+ui/build/
+ui/coverage/
+
+# UI folder dependencies
+ui/node_modules/
+ui/npm-debug.log*
+ui/yarn-debug.log*
+ui/yarn-error.log*
+ui/package-lock.json
+ui/yarn.lock 
