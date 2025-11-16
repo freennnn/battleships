@@ -46,6 +46,12 @@ export class RoomManager {
       return false;
     }
 
+    // Check if user is already in the room
+    if (room.users.some((user) => user.index === userId)) {
+      console.log(`User ${username} (User ID: ${userId}) is already in room ${roomId}`);
+      return false;
+    }
+
     room.users.push({
       name: username,
       index: userId,

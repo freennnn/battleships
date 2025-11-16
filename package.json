@@ -2,21 +2,20 @@
   "name": "battleships",
   "version": "1.0.0",
   "description": "Battleships game backend",
-  "main": "src/index.js",
+  "main": "dist/index.js",
   "type": "module",
-    "scripts": {
-        "start": "node src/index.js",
-        "dev": "nodemon src/index.js",
-        "dev:ts": "tsx watch src/index.ts",
-        "build": "tsc",
-        "test": "jest",
-        "lint": "biome lint src/",
-        "lint:fix": "biome lint --write src/",
-        "format": "biome format src/",
-        "format:fix": "biome format --write src/",
-        "check": "biome check src/",
-        "check:fix": "biome check --write src/"
-    },
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "test": "jest",
+    "lint": "biome lint src/",
+    "lint:fix": "biome lint --write src/",
+    "format": "biome format src/",
+    "format:fix": "biome format --write src/",
+    "check": "biome check src/",
+    "check:fix": "biome check --write src/"
+  },
   "dependencies": {
     "ws": "^8.16.0"
   },

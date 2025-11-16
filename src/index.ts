@@ -1,15 +1,20 @@
 import http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
+import { AttackHandler } from "./modules/AttackHandler.js";
 import { AuthHandler } from "./modules/AuthHandler.js";
 import { BroadcastService } from "./modules/BroadcastService.js";
+import { CombatProcessor } from "./modules/CombatProcessor.js";
+import { GameManager } from "./modules/GameManager.js";
+import { GameStateManager } from "./modules/GameStateManager.js";
 import { RoomHandler } from "./modules/RoomHandler.js";
 import { RoomManager } from "./modules/RoomManager.js";
 import { ShipGenerator } from "./modules/ShipGenerator.js";
 import { ShipValidator } from "./modules/ShipValidator.js";
 import { UserManager } from "./modules/UserManager.js";
+import type { Game } from "./types/game.types.js";
+import { BOT_ID } from "./types/game.types.js";
 import type { WebSocketMessage } from "./types/message.types.js";
 import type { ClientInfo } from "./types/user.types.js";
-import { getShipCells, getSurroundingCells } from "./utils/shipUtils.js";
 
 // Create HTTP server, needed for websocket client to handle HTTP 101 - switching protocol
 const server = http.createServer((_req, res) => {
@@ -26,26 +31,34 @@ const wss = new WebSocketServer({
 
 const userManager = new UserManager();
 const clients = new Map<string, ClientInfo>();
+const games = new Map<string, Game>();
 const authHandler = new AuthHandler(userManager, clients);
 const broadcastService = new BroadcastService(wss, userManager);
 const roomManager = new RoomManager();
 const roomHandler = new RoomHandler(roomManager, clients);
 const shipValidator = new ShipValidator();
 const shipGenerator = new ShipGenerator();
+const gameManager = new GameManager(games, clients, shipGenerator, BOT_ID);
+const gameStateManager = new GameStateManager(
+  games,
+  clients,
+  userManager,
+  broadcastService,
+  BOT_ID
+);
+const combatProcessor = new CombatProcessor(clients);
+const attackHandler = new AttackHandler(games, clients, combatProcessor, gameStateManager, BOT_ID);
 
 // Connect room handler to broadcast service
 broadcastService.setRoomHandler(roomHandler);
 
 // Set callback for when room becomes full (triggers game creation)
 roomHandler.setRoomFullCallback((room) => {
-  createGame(room);
+  gameManager.createGame(room);
 });
 
-// Store active games
-const games = new Map();
-
-// Bot player ID
-const BOT_ID = "bot";
+// Set callback for bot moves
+attackHandler.setMakeBotMoveCallback((game) => makeBotMove(game));
 
 // Handle new connections
 wss.on("connection", (ws: WebSocket, _req) => {
@@ -126,13 +139,13 @@ wss.on("connection", (ws: WebSocket, _req) => {
           handleAddShips(ws, data, clientId);
           break;
         case "attack":
-          handleAttack(ws, data, clientId);
+          attackHandler.handleAttack(ws, data, clientId);
           break;
         case "randomAttack":
-          handleRandomAttack(ws, data, clientId);
+          attackHandler.handleRandomAttack(ws, data, clientId);
           break;
         case "single_play":
-          createSinglePlayerGame(clientId);
+          gameManager.createSinglePlayerGame(clientId);
           break;
         default:
           console.log(`Unknown message type from ${clientId}:`, data.type);
@@ -175,34 +188,7 @@ wss.on("connection", (ws: WebSocket, _req) => {
       }
 
       // Handle active games - find and end any games this player is in
-      games.forEach((game: any, gameId: string) => {
-        const playerInGame = game.players.find((p: any) => p.id === clientId);
-        if (playerInGame) {
-          console.log(`Player ${clientId} disconnected from active game ${gameId}`);
-
-          // Find the other player (if not a bot)
-          const otherPlayer = game.players.find((p: any) => p.id !== clientId);
-          if (otherPlayer) {
-            // Notify the other player that opponent disconnected
-            const otherClient = clients.get(otherPlayer.id);
-            if (otherClient && otherClient.ws.readyState === WebSocket.OPEN) {
-              otherClient.ws.send(
-                JSON.stringify({
-                  type: "finish",
-                  data: JSON.stringify({
-                    winPlayer: otherPlayer.id,
-                  }),
-                  id: 0,
-                })
-              );
-            }
-          }
-
-          // Remove the game
-          games.delete(gameId);
-          console.log(`Game ${gameId} ended due to player disconnection`);
-        }
-      });
+      gameStateManager.handlePlayerDisconnectFromGame(clientId);
 
       client.isAlive = false;
       clients.delete(clientId);
@@ -218,115 +204,6 @@ server.on("upgrade", (request, socket, head) => {
     wss.emit("connection", ws, request);
   });
 });
-
-// Create game when room is full
-function createGame(room: any) {
-  try {
-    const gameId = Date.now().toString();
-
-    // Create game state
-    const game = {
-      id: gameId,
-      players: room.users.map((user: any) => ({
-        id: user.index,
-        name: user.name,
-        ships: [],
-        board: Array(10)
-          .fill(null)
-          .map(() => Array(10).fill(null)),
-        ready: false,
-        isBot: false,
-      })),
-      currentPlayerIndex: room.users[0].index,
-      lastHit: null,
-    };
-
-    games.set(gameId, game);
-
-    // Notify both players
-    room.users.forEach((user: any) => {
-      const client = clients.get(user.index);
-      if (client && client.ws.readyState === WebSocket.OPEN) {
-        const response = {
-          type: "create_game",
-          data: JSON.stringify({
-            idGame: gameId,
-            idPlayer: user.index,
-          }),
-          id: 0,
-        };
-        client.ws.send(JSON.stringify(response));
-      }
-    });
-
-    console.log(`Game ${gameId} created for room ${room.id}`);
-  } catch (err) {
-    console.error(`Error creating game for room ${room.id}:`, err);
-  }
-}
-
-// Create single player game with bot
-function createSinglePlayerGame(clientId: string) {
-  try {
-    const gameId = Date.now().toString();
-    const client = clients.get(clientId);
-
-    if (!client || !client.username) {
-      console.log(`Client ${clientId} not found or not registered with a username`);
-      return;
-    }
-
-    // Create game state
-    const game = {
-      id: gameId,
-      players: [
-        {
-          id: clientId,
-          name: client.username,
-          ships: [],
-          board: Array(10)
-            .fill(null)
-            .map(() => Array(10).fill(null)),
-          ready: false,
-          isBot: false,
-        },
-        {
-          id: BOT_ID,
-          name: "Bot",
-          ships: shipGenerator.generateBotShips(),
-          board: Array(10)
-            .fill(null)
-            .map(() => Array(10).fill(null)),
-          ready: true,
-          isBot: true,
-        },
-      ],
-      currentPlayerIndex: clientId,
-      lastHit: null,
-    };
-
-    games.set(gameId, game);
-
-    // Notify player
-    if (client.ws.readyState === WebSocket.OPEN) {
-      const response = {
-        type: "create_game",
-        data: JSON.stringify({
-          idGame: gameId,
-          idPlayer: clientId,
-        }),
-        id: 0,
-      };
-      client.ws.send(JSON.stringify(response));
-    }
-
-    console.log(
-      `Single player game ${gameId} created for player ${client.username} (Client ID: ${clientId})`
-    );
-  } catch (err) {
-    console.error(`Error creating single player game for ${clientId}:`, err);
-  }
-}
 
 // Handle adding ships
 function handleAddShips(ws: WebSocket, data: any, clientId: string) {
@@ -366,7 +243,7 @@ function handleAddShips(ws: WebSocket, data: any, clientId: string) {
 
     // Check if both players are ready
     if (game.players.every((p: any) => p.ready)) {
-      startGame(game);
+      gameManager.startGame(game);
     } else {
       // Notify player that their ships were received
       const response = {
@@ -383,356 +260,6 @@ function handleAddShips(ws: WebSocket, data: any, clientId: string) {
     console.log(`Ships added for player ${indexPlayer} in game ${gameId}`);
   } catch (err) {
     console.error(`Error adding ships for player ${clientId}:`, err);
-  }
-}
-
-// Start game when both players are ready
-function startGame(game: any) {
-  try {
-    game.players.forEach((player: any) => {
-      const client = clients.get(player.id);
-      if (client && client.ws.readyState === WebSocket.OPEN) {
-        const response = {
-          type: "start_game",
-          data: JSON.stringify({
-            ships: player.ships,
-            currentPlayerIndex: game.currentPlayerIndex,
-          }),
-          id: 0,
-        };
-        client.ws.send(JSON.stringify(response));
-
-        const turnResponse = {
-          type: "turn",
-          data: JSON.stringify({
-            currentPlayer: game.currentPlayerIndex,
-          }),
-          id: 0,
-        };
-        client.ws.send(JSON.stringify(turnResponse));
-      }
-    });
-
-    console.log(`Game ${game.id} started`);
-  } catch (err) {
-    console.error(`Error starting game ${game.id}:`, err);
-  }
-}
-
-// Handle attack
-function handleAttack(_ws: WebSocket, data: any, clientId: string) {
-  try {
-    let attackData: any;
-    try {
-      attackData = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
-    } catch (parseError) {
-      console.error(`Failed to parse attack data from ${clientId}:`, parseError);
-      return;
-    }
-
-    const { gameId, x, y, indexPlayer } = attackData;
-    const game = games.get(gameId);
-
-    if (!game) {
-      console.log(`Game ${gameId} not found`);
-      return;
-    }
-
-    if (game.currentPlayerIndex !== indexPlayer) {
-      console.log(`Not player ${indexPlayer}'s turn in game ${gameId}`);
-      return;
-    }
-
-    const targetPlayer = game.players.find((p: any) => p.id !== indexPlayer);
-    if (!targetPlayer) {
-      console.log(`Target player not found in game ${gameId}`);
-      console.log(`  indexPlayer: ${indexPlayer} (type: ${typeof indexPlayer})`);
-      console.log(
-        `  Game players:`,
-        game.players.map((p: any) => ({ id: p.id, type: typeof p.id, name: p.name }))
-      );
-      console.log(`  Total players in game: ${game.players.length}`);
-      return;
-    }
-
-    console.log(`\n=== Attack by ${indexPlayer} at (${x}, ${y}) ===`);
-
-    const attackResult = processAttack(targetPlayer, x, y);
-
-    console.log(`Attack result:`, attackResult);
-
-    game.players.forEach((player: any) => {
-      const client = clients.get(player.id);
-      if (client && client.ws.readyState === WebSocket.OPEN) {
-        const response = {
-          type: "attack",
-          data: JSON.stringify({
-            position: { x, y },
-            currentPlayer: indexPlayer,
-            status: attackResult.status,
-          }),
-          id: 0,
-        };
-        client.ws.send(JSON.stringify(response));
-      }
-    });
-
-    if (attackResult.status === "killed") {
-      console.log(`Ship killed at (${x}, ${y})`);
-      sendSurroundingMisses(game, attackResult.ship);
-      game.lastHit = null;
-
-      if (checkGameOver(targetPlayer)) {
-        console.log(`Game over detected for player ${targetPlayer.name}`);
-        endGame(game, indexPlayer);
-        return;
-      }
-    } else if (attackResult.status === "shot") {
-      console.log(`Ship hit at (${x}, ${y})`);
-      game.lastHit = { x, y };
-    }
-
-    if (attackResult.status === "miss") {
-      game.currentPlayerIndex = targetPlayer.id;
-    }
-
-    game.players.forEach((player: any) => {
-      const client = clients.get(player.id);
-      if (client && client.ws.readyState === WebSocket.OPEN) {
-        const turnResponse = {
-          type: "turn",
-          data: JSON.stringify({
-            currentPlayer: game.currentPlayerIndex,
-          }),
-          id: 0,
-        };
-        client.ws.send(JSON.stringify(turnResponse));
-      }
-    });
-
-    if (game.currentPlayerIndex === BOT_ID) {
-      setTimeout(() => makeBotMove(game), 1000);
-    }
-
-    console.log(`Attack processed for player ${indexPlayer} in game ${gameId}`);
-  } catch (err) {
-    console.error(`Error processing attack for player ${clientId}:`, err);
-  }
-}
-
-// Process attack on player's board
-function processAttack(player: any, x: number, y: number) {
-  if (player.board[y][x] !== null) {
-    console.log(`Cell (${x}, ${y}) already attacked with status:`, player.board[y][x]);
-    return { status: "miss", ship: null };
-  }
-
-  for (const ship of player.ships) {
-    const shipCells = getShipCells(ship);
-    const hitCell = shipCells.find((cell: any) => cell.x === x && cell.y === y);
-
-    if (hitCell) {
-      console.log(`Ship hit! Type: ${ship.type}, Length: ${ship.length}`);
-      player.board[y][x] = "hit";
-
-      const isKilled = shipCells.every((cell: any) => {
-        return player.board[cell.y][cell.x] === "hit" || player.board[cell.y][cell.x] === "killed";
-      });
-
-      if (isKilled) {
-        console.log("Ship killed! Marking all cells as killed");
-        shipCells.forEach((cell: any) => {
-          player.board[cell.y][cell.x] = "killed";
-        });
-        return {
-          status: "killed",
-          ship: ship,
-        };
-      }
-
-      return {
-        status: "shot",
-        ship: null,
-      };
-    }
-  }
-
-  console.log("Miss!");
-  player.board[y][x] = "miss";
-  return { status: "miss", ship: null };
-}
-
-// Send miss for cells surrounding a killed ship
-function sendSurroundingMisses(game: any, ship: any) {
-  const surroundingCells = getSurroundingCells(ship);
-  const targetPlayer = game.players.find((p: any) => p.id !== game.currentPlayerIndex);
-
-  surroundingCells.forEach((cell: any) => {
-    const isPartOfAnotherShip = targetPlayer.ships.some((s: any) => {
-      if (s === ship) return false;
-      const shipCells = getShipCells(s);
-      return shipCells.some((sc: any) => sc.x === cell.x && sc.y === cell.y);
-    });
-
-    if (targetPlayer.board[cell.y][cell.x] === null && !isPartOfAnotherShip) {
-      targetPlayer.board[cell.y][cell.x] = "miss";
-    }
-  });
-
-  game.players.forEach((player: any) => {
-    const client = clients.get(player.id);
-    if (client && client.ws.readyState === WebSocket.OPEN) {
-      const shipCells = getShipCells(ship);
-      shipCells.forEach((cell: any) => {
-        const response = {
-          type: "attack",
-          data: JSON.stringify({
-            position: cell,
-            currentPlayer: game.currentPlayerIndex,
-            status: "killed",
-          }),
-          id: 0,
-        };
-        client.ws.send(JSON.stringify(response));
-      });
-
-      surroundingCells.forEach((cell: any) => {
-        const currentCellState = targetPlayer.board[cell.y][cell.x];
-        if (currentCellState !== null) {
-          const response = {
-            type: "attack",
-            data: JSON.stringify({
-              position: cell,
-              currentPlayer: game.currentPlayerIndex,
-              status: currentCellState,
-            }),
-            id: 0,
-          };
-          client.ws.send(JSON.stringify(response));
-        }
-      });
-    }
-  });
-}
-
-// Handle random attack
-function handleRandomAttack(ws: WebSocket, data: any, clientId: string) {
-  try {
-    let randomAttackData: any;
-    try {
-      randomAttackData = typeof data.data === "string" ? JSON.parse(data.data) : data.data;
-    } catch (parseError) {
-      console.error(`Failed to parse random attack data from ${clientId}:`, parseError);
-      return;
-    }
-
-    const { gameId, indexPlayer } = randomAttackData;
-    const game = games.get(gameId);
-
-    if (!game) {
-      console.log(`Game ${gameId} not found`);
-      return;
-    }
-
-    if (game.currentPlayerIndex !== indexPlayer) {
-      console.log(`Not player ${indexPlayer}'s turn in game ${gameId}`);
-      return;
-    }
-
-    const targetPlayer = game.players.find((p: any) => p.id !== indexPlayer);
-    if (!targetPlayer) {
-      console.log(`Target player not found in game ${gameId}`);
-      console.log(`  indexPlayer: ${indexPlayer} (type: ${typeof indexPlayer})`);
-      console.log(
-        `  Game players:`,
-        game.players.map((p: any) => ({ id: p.id, type: typeof p.id, name: p.name }))
-      );
-      console.log(`  Total players in game: ${game.players.length}`);
-      return;
-    }
-
-    let x: number, y: number;
-    do {
-      x = Math.floor(Math.random() * 10);
-      y = Math.floor(Math.random() * 10);
-    } while (targetPlayer.board[y][x] !== null);
-
-    const attackRequest = {
-      gameId,
-      x,
-      y,
-      indexPlayer,
-    };
-    handleAttack(ws, { type: "attack", data: JSON.stringify(attackRequest), id: 0 }, clientId);
-
-    console.log(`Random attack processed for player ${indexPlayer} in game ${gameId}`);
-  } catch (err) {
-    console.error(`Error processing random attack for player ${clientId}:`, err);
-  }
-}
-
-// Check if game is over
-function checkGameOver(player: any): boolean {
-  console.log("\n=== Checking Game Over ===");
-  console.log("Player:", player.name);
-
-  const isGameOver = player.ships.every((ship: any) => {
-    const shipCells = getShipCells(ship);
-    const isShipDestroyed = shipCells.every(
-      (cell: any) => player.board[cell.y][cell.x] === "killed"
-    );
-    console.log(`Ship ${ship.type} destroyed:`, isShipDestroyed);
-    return isShipDestroyed;
-  });
-
-  console.log("\nGame over:", isGameOver);
-  console.log("=== End Game Over Check ===\n");
-  return isGameOver;
-}
-
-// End game
-function endGame(game: any, winnerId: string) {
-  try {
-    console.log(`Game ${game.id} ending, winner: ${winnerId}`);
-
-    const winnerClient = clients.get(winnerId);
-    if (winnerClient?.username) {
-      userManager.incrementWins(winnerClient.username);
-    } else if (winnerId === BOT_ID) {
-      console.log("Bot won the game.");
-    } else {
-      console.error(`Winner client not found or username missing for winnerId: ${winnerId}`);
-    }
-
-    game.players.forEach((player: any) => {
-      const client = clients.get(player.id);
-      if (client && client.ws.readyState === WebSocket.OPEN) {
-        const response = {
-          type: "finish",
-          data: JSON.stringify({
-            winPlayer: winnerId,
-          }),
-          id: 0,
-        };
-        client.ws.send(JSON.stringify(response));
-
-        const turnResponse = {
-          type: "turn",
-          data: JSON.stringify({
-            currentPlayer: null,
-          }),
-          id: 0,
-        };
-        client.ws.send(JSON.stringify(turnResponse));
-      }
-    });
-
-    broadcastService.broadcastWinnersUpdate();
-    games.delete(game.id);
-
-    console.log(`Game ${game.id} finished, winner: ${winnerId}`);
-  } catch (err) {
-    console.error(`Error ending game ${game.id}:`, err);
   }
 }
 
@@ -814,8 +341,8 @@ function makeBotMove(game: any) {
     };
 
     const client = clients.get(targetPlayer.id);
-    if (client && client.ws.readyState === WebSocket.OPEN) {
-      handleAttack(
+    if (client?.ws.readyState === WebSocket.OPEN) {
+      attackHandler.handleAttack(
         client.ws,
         {
           type: "attack",
