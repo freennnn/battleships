@@ -1,6 +1,6 @@
 # Battleships Game
 
-A WebSocket-based Battleships game backend implementation.
+A WebSocket-based Battleships game backend implementation with TypeScript refactoring.
 
 ## Setup
 
@@ -10,11 +10,25 @@ npm install
 ```
 
 2. Start the server:
+
+**JavaScript version (original):**
 ```bash
 npm run dev
 ```
 
+**TypeScript version (refactored):**
+```bash
+npm run dev:ts
+```
+
 The WebSocket server will start on port 3000.
+
+## Project Structure
+
+- `src/index.js` - Original JavaScript implementation
+- `src/index.ts` - New TypeScript implementation with modular architecture
+- `src/types/` - TypeScript type definitions
+- `src/modules/` - Refactored modules (UserManager, AuthHandler, BroadcastService)
 
 ## WebSocket Protocol
 
