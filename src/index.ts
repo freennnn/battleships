@@ -4,9 +4,12 @@ import { AuthHandler } from "./modules/AuthHandler.js";
 import { BroadcastService } from "./modules/BroadcastService.js";
 import { RoomHandler } from "./modules/RoomHandler.js";
 import { RoomManager } from "./modules/RoomManager.js";
+import { ShipGenerator } from "./modules/ShipGenerator.js";
+import { ShipValidator } from "./modules/ShipValidator.js";
 import { UserManager } from "./modules/UserManager.js";
 import type { WebSocketMessage } from "./types/message.types.js";
 import type { ClientInfo } from "./types/user.types.js";
+import { getShipCells, getSurroundingCells } from "./utils/shipUtils.js";
 
 // Create HTTP server, needed for websocket client to handle HTTP 101 - switching protocol
 const server = http.createServer((_req, res) => {
@@ -27,6 +30,8 @@ const authHandler = new AuthHandler(userManager, clients);
 const broadcastService = new BroadcastService(wss, userManager);
 const roomManager = new RoomManager();
 const roomHandler = new RoomHandler(roomManager, clients);
+const shipValidator = new ShipValidator();
+const shipGenerator = new ShipGenerator();
 
 // Connect room handler to broadcast service
 broadcastService.setRoomHandler(roomHandler);
@@ -288,7 +293,7 @@ function createSinglePlayerGame(clientId: string) {
         {
           id: BOT_ID,
           name: "Bot",
-          ships: generateBotShips(),
+          ships: shipGenerator.generateBotShips(),
           board: Array(10)
             .fill(null)
             .map(() => Array(10).fill(null)),
@@ -350,7 +355,7 @@ function handleAddShips(ws: WebSocket, data: any, clientId: string) {
     }
 
     // Validate ships
-    if (!validateShips(ships)) {
+    if (!shipValidator.validateShips(ships)) {
       console.log(`Invalid ships configuration from player ${indexPlayer}`);
       return;
     }
@@ -379,63 +384,6 @@ function handleAddShips(ws: WebSocket, data: any, clientId: string) {
   } catch (err) {
     console.error(`Error adding ships for player ${clientId}:`, err);
   }
-}
-
-// Validate ships configuration
-function validateShips(ships: any[]): boolean {
-  if (!Array.isArray(ships) || ships.length !== 10) {
-    return false;
-  }
-
-  const shipCounts: Record<string, number> = {
-    small: 0,
-    medium: 0,
-    large: 0,
-    huge: 0,
-  };
-
-  for (const ship of ships) {
-    if (
-      !ship.position ||
-      typeof ship.position.x !== "number" ||
-      typeof ship.position.y !== "number" ||
-      typeof ship.direction !== "boolean" ||
-      typeof ship.length !== "number" ||
-      !ship.type
-    ) {
-      return false;
-    }
-
-    if (!["small", "medium", "large", "huge"].includes(ship.type)) {
-      return false;
-    }
-
-    const expectedLength: Record<string, number> = {
-      small: 1,
-      medium: 2,
-      large: 3,
-      huge: 4,
-    };
-
-    if (ship.length !== expectedLength[ship.type]) {
-      return false;
-    }
-
-    shipCounts[ship.type]++;
-
-    const maxX = ship.direction ? ship.position.x : ship.position.x + ship.length - 1;
-    const maxY = ship.direction ? ship.position.y + ship.length - 1 : ship.position.y;
-    if (maxX >= 10 || maxY >= 10) {
-      return false;
-    }
-  }
-
-  return (
-    shipCounts.small === 4 &&
-    shipCounts.medium === 3 &&
-    shipCounts.large === 2 &&
-    shipCounts.huge === 1
-  );
 }
 
 // Start game when both players are ready
@@ -469,93 +417,6 @@ function startGame(game: any) {
   } catch (err) {
     console.error(`Error starting game ${game.id}:`, err);
   }
-}
-
-// Generate random ship positions for bot
-function generateBotShips() {
-  const ships: any[] = [];
-  const board = Array(10)
-    .fill(null)
-    .map(() => Array(10).fill(null));
-  const shipTypes = [
-    { type: "small", length: 1, count: 4 },
-    { type: "medium", length: 2, count: 3 },
-    { type: "large", length: 3, count: 2 },
-    { type: "huge", length: 4, count: 1 },
-  ];
-
-  for (const shipType of shipTypes) {
-    for (let i = 0; i < shipType.count; i++) {
-      let validPosition = false;
-      let newShip: any;
-
-      while (!validPosition) {
-        const x = Math.floor(Math.random() * 10);
-        const y = Math.floor(Math.random() * 10);
-        const direction = Math.random() < 0.5;
-
-        const potentialShip = {
-          position: { x, y },
-          direction,
-          length: shipType.length,
-          type: shipType.type,
-        };
-
-        const newShipCells = getShipCells(potentialShip);
-
-        const fitsOnBoard = newShipCells.every(
-          (cell) => cell.x >= 0 && cell.x < 10 && cell.y >= 0 && cell.y < 10
-        );
-        if (!fitsOnBoard) continue;
-
-        const overlapsDirectly = newShipCells.some((cell) => board[cell.y][cell.x] === "ship");
-        if (overlapsDirectly) continue;
-
-        let isAdjacentToExistingShip = false;
-        for (const cell of newShipCells) {
-          for (let dx = -1; dx <= 1; dx++) {
-            for (let dy = -1; dy <= 1; dy++) {
-              const checkX = cell.x + dx;
-              const checkY = cell.y + dy;
-
-              if (checkX >= 0 && checkX < 10 && checkY >= 0 && checkY < 10) {
-                if (board[checkY][checkX] === "ship") {
-                  isAdjacentToExistingShip = true;
-                  break;
-                }
-              }
-            }
-            if (isAdjacentToExistingShip) break;
-          }
-          if (isAdjacentToExistingShip) break;
-        }
-        if (isAdjacentToExistingShip) continue;
-
-        newShip = potentialShip;
-        validPosition = true;
-
-        newShipCells.forEach((cell) => {
-          board[cell.y][cell.x] = "ship";
-        });
-      }
-      ships.push(newShip);
-    }
-  }
-
-  console.log("\n=== Bot's Initial Board State (with no-adjacency) ===");
-  console.log(
-    "  " +
-      Array(10)
-        .fill(0)
-        .map((_, i) => i)
-        .join(" ")
-  );
-  board.forEach((row, y) => {
-    console.log(`${y} ${row.map((cell) => (cell === "ship" ? "S" : ".")).join(" ")}`);
-  });
-  console.log("=== End Bot's Board State ===\n");
-
-  return ships;
 }
 
 // Handle attack
@@ -701,18 +562,6 @@ function processAttack(player: any, x: number, y: number) {
   return { status: "miss", ship: null };
 }
 
-// Get all cells occupied by a ship
-function getShipCells(ship: any) {
-  const cells = [];
-  for (let i = 0; i < ship.length; i++) {
-    cells.push({
-      x: ship.direction ? ship.position.x : ship.position.x + i,
-      y: ship.direction ? ship.position.y + i : ship.position.y,
-    });
-  }
-  return cells;
-}
-
 // Send miss for cells surrounding a killed ship
 function sendSurroundingMisses(game: any, ship: any) {
   const surroundingCells = getSurroundingCells(ship);
@@ -764,31 +613,6 @@ function sendSurroundingMisses(game: any, ship: any) {
       });
     }
   });
-}
-
-// Get cells surrounding a ship
-function getSurroundingCells(ship: any) {
-  const cells: any[] = [];
-  const shipCells = getShipCells(ship);
-
-  for (const cell of shipCells) {
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        const x = cell.x + dx;
-        const y = cell.y + dy;
-
-        if (x < 0 || x >= 10 || y < 0 || y >= 10) continue;
-
-        if (shipCells.some((sc: any) => sc.x === x && sc.y === y)) continue;
-
-        if (!cells.some((c) => c.x === x && c.y === y)) {
-          cells.push({ x, y });
-        }
-      }
-    }
-  }
-
-  return cells;
 }
 
 // Handle random attack
