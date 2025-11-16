@@ -1,5 +1,6 @@
 import { WebSocket, WebSocketServer } from "ws";
 import { UserManager } from "./UserManager.js";
+import { RoomHandler } from "./RoomHandler.js";
 
 /**
  * Service for broadcasting messages to clients
@@ -7,10 +8,18 @@ import { UserManager } from "./UserManager.js";
 export class BroadcastService {
     private wss: WebSocketServer;
     private userManager: UserManager;
+    private roomHandler?: RoomHandler;
 
     constructor(wss: WebSocketServer, userManager: UserManager) {
         this.wss = wss;
         this.userManager = userManager;
+    }
+
+    /**
+     * Set room handler for room broadcasts
+     */
+    setRoomHandler(roomHandler: RoomHandler): void {
+        this.roomHandler = roomHandler;
     }
 
     /**
@@ -55,6 +64,36 @@ export class BroadcastService {
             console.log("Winners update broadcasted");
         } catch (err) {
             console.error("Error broadcasting winners update:", err);
+        }
+    }
+
+    /**
+     * Broadcast room list update to all connected clients
+     */
+    broadcastRoomUpdate(): void {
+        try {
+            if (!this.roomHandler) {
+                console.error("RoomHandler not set in BroadcastService");
+                return;
+            }
+
+            const roomList = this.roomHandler.getAvailableRooms();
+
+            const response = {
+                type: "update_room",
+                data: JSON.stringify(roomList),
+                id: 0,
+            };
+
+            this.wss.clients.forEach((client) => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify(response));
+                }
+            });
+
+            console.log("Room update broadcasted");
+        } catch (err) {
+            console.error("Error broadcasting room update:", err);
         }
     }
 }

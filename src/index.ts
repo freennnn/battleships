@@ -3,6 +3,8 @@ import http from "http";
 import { UserManager } from "./modules/UserManager.js";
 import { AuthHandler } from "./modules/AuthHandler.js";
 import { BroadcastService } from "./modules/BroadcastService.js";
+import { RoomManager } from "./modules/RoomManager.js";
+import { RoomHandler } from "./modules/RoomHandler.js";
 import { ClientInfo } from "./types/user.types.js";
 import { WebSocketMessage } from "./types/message.types.js";
 
@@ -23,9 +25,16 @@ const userManager = new UserManager();
 const clients = new Map<string, ClientInfo>();
 const authHandler = new AuthHandler(userManager, clients);
 const broadcastService = new BroadcastService(wss, userManager);
+const roomManager = new RoomManager();
+const roomHandler = new RoomHandler(roomManager, clients);
 
-// Store game rooms
-const rooms = new Map();
+// Connect room handler to broadcast service
+broadcastService.setRoomHandler(roomHandler);
+
+// Set callback for when room becomes full (triggers game creation)
+roomHandler.setRoomFullCallback((room) => {
+    createGame(room);
+});
 
 // Store active games
 const games = new Map();
@@ -100,10 +109,12 @@ wss.on("connection", (ws: WebSocket, _req) => {
                     }
                     break;
                 case "create_room":
-                    handleCreateRoom(ws, clientId);
+                    roomHandler.handleCreateRoom(clientId);
+                    broadcastService.broadcastRoomUpdate();
                     break;
                 case "add_user_to_room":
-                    handleAddUserToRoom(ws, data, clientId);
+                    roomHandler.handleAddUserToRoom(data, clientId);
+                    broadcastService.broadcastRoomUpdate();
                     break;
                 case "add_ships":
                     handleAddShips(ws, data, clientId);
@@ -152,16 +163,9 @@ wss.on("connection", (ws: WebSocket, _req) => {
         const client = clients.get(clientId);
         if (client) {
             // If client was in a room, remove them and update room state
-            if (client.roomId) {
-                const room = rooms.get(client.roomId);
-                if (room) {
-                    room.users = room.users.filter((user: any) => user.index !== clientId);
-                    if (room.users.length === 0) {
-                        rooms.delete(client.roomId);
-                    } else {
-                        broadcastRoomUpdate();
-                    }
-                }
+            const wasInRoom = roomHandler.handleUserDisconnect(clientId);
+            if (wasInRoom) {
+                broadcastService.broadcastRoomUpdate();
             }
 
             // Handle active games - find and end any games this player is in
@@ -206,99 +210,6 @@ server.on("upgrade", (request, socket, head) => {
         wss.emit("connection", ws, request);
     });
 });
-
-// Handle room creation
-function handleCreateRoom(_ws: WebSocket, clientId: string) {
-    try {
-        const client = clients.get(clientId);
-        if (!client || !client.username) {
-            console.log(`Client ${clientId} not registered or username missing`);
-            return;
-        }
-
-        // Create new room
-        const roomId = Date.now().toString();
-        const room = {
-            id: roomId,
-            users: [
-                {
-                    name: client.username,
-                    index: clientId,
-                },
-            ],
-        };
-        rooms.set(roomId, room);
-
-        // Update client's room
-        client.roomId = roomId;
-
-        // Broadcast room update to all clients
-        broadcastRoomUpdate();
-
-        console.log(
-            `Room ${roomId} created by ${client.username} (Client ID: ${clientId})`
-        );
-    } catch (err) {
-        console.error(`Error creating room for ${clientId}:`, err);
-    }
-}
-
-// Handle adding user to room
-function handleAddUserToRoom(_ws: WebSocket, data: any, clientId: string) {
-    try {
-        const client = clients.get(clientId);
-        if (!client || !client.username) {
-            console.log(`Client ${clientId} not registered or username missing`);
-            return;
-        }
-
-        // Parse room index
-        let roomData;
-        try {
-            roomData =
-                typeof data.data === "string" ? JSON.parse(data.data) : data.data;
-        } catch (parseError) {
-            console.error(`Failed to parse room data from ${clientId}:`, parseError);
-            return;
-        }
-
-        const roomId = roomData.indexRoom;
-        const room = rooms.get(roomId);
-
-        if (!room) {
-            console.log(`Room ${roomId} not found`);
-            return;
-        }
-
-        if (room.users.length >= 2) {
-            console.log(`Room ${roomId} is full`);
-            return;
-        }
-
-        // Add user to room
-        room.users.push({
-            name: client.username,
-            index: clientId,
-        });
-
-        // Update client's room
-        client.roomId = roomId;
-
-        // If room is full, create game
-        if (room.users.length === 2) {
-            createGame(room);
-        }
-
-        // Broadcast room update to all clients
-        broadcastRoomUpdate();
-
-        console.log(
-            `User ${client.username} (Client ID: ${clientId}) added to room ${roomId}`
-        );
-    } catch (err) {
-        console.error(`Error adding user to room for ${clientId}:`, err);
-    }
-}
 
 // Create game when room is full
 function createGame(room: any) {
@@ -1027,34 +938,6 @@ function endGame(game: any, winnerId: string) {
         console.log(`Game ${game.id} finished, winner: ${winnerId}`);
     } catch (err) {
         console.error(`Error ending game ${game.id}:`, err);
-    }
-}
-
-// Broadcast room updates to all clients
-function broadcastRoomUpdate() {
-    try {
-        const roomList = Array.from(rooms.values())
-            .filter((room: any) => room.users.length === 1)
-            .map((room: any) => ({
-                roomId: room.id,
-                roomUsers: room.users,
-            }));
-
-        const response = {
-            type: "update_room",
-            data: JSON.stringify(roomList),
-            id: 0,
-        };
-
-        wss.clients.forEach((client) => {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify(response));
-            }
-        });
-
-        console.log("Room update broadcasted");
-    } catch (err) {
-        console.error("Error broadcasting room update:", err);
     }
 }
 
